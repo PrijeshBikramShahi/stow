@@ -1,0 +1,30 @@
+{
+  "name": "stow",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite --host 127.0.0.1",
+    "build": "tsc --noEmit && vite build",
+    "tauri": "tauri",
+    "desktop": "tauri dev",
+    "desktop:build": "tauri build --bundles app",
+    "test": "cargo test --workspace --no-default-features",
+    "check": "cargo fmt --all -- --check && cargo clippy --workspace --all-targets --no-default-features -- -D warnings && npm run build",
+    "test:frontend": "node --experimental-strip-types --test tests/*.test.mjs"
+  },
+  "dependencies": {
+    "@tauri-apps/api": "^2.0.0",
+    "@tauri-apps/plugin-dialog": "^2.0.0",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^2.0.0",
+    "@types/react": "^19.0.0",
+    "@types/react-dom": "^19.0.0",
+    "@vitejs/plugin-react": "^4.4.0",
+    "typescript": "~5.8.3",
+    "vite": "^6.4.0"
+  }
+}

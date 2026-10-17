@@ -117,7 +117,7 @@ impl Operations {
             match outcome {
                 Ok(()) => op.state = OperationState::Completed,
                 Err(error) => {
-                    op.state = if op.kind == "pull" && error.code == ErrorCode::RecoveryRequired {
+                    op.state = if error.code == ErrorCode::RecoveryRequired {
                         OperationState::RequiresInspection
                     } else if error.code == ErrorCode::Cancelled {
                         OperationState::Cancelled

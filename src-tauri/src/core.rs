@@ -28,6 +28,8 @@ pub enum ErrorCode {
     Collision,
     CloneFailed,
     FetchFailed,
+    PushFailed,
+    PushRejected,
     RecoveryRequired,
     EditorUnavailable,
     EditorFailed,

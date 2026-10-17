@@ -119,25 +119,32 @@ pub(crate) fn supervise(
         ));
     }
     if !status.success() && !(allow_missing && status.code() == Some(1)) {
-        if failure_code == ErrorCode::FetchFailed {
+        if failure_code == ErrorCode::FetchFailed || failure_code == ErrorCode::PushFailed {
             let diagnostic = String::from_utf8_lossy(&stderr).to_ascii_lowercase();
             if diagnostic.contains("authentication failed")
                 || diagnostic.contains("could not read username")
                 || diagnostic.contains("invalid username or token")
             {
-                return Err(error(ErrorCode::Authentication,"Fetch authentication failed. Recheck the saved GitHub CLI login and repository access."));
+                return Err(error(ErrorCode::Authentication,"Git authentication failed. Recheck the saved GitHub CLI login and repository access."));
             }
             if diagnostic.contains("could not resolve host")
                 || diagnostic.contains("failed to connect")
             {
                 return Err(error(
                     ErrorCode::Network,
-                    "Fetch could not reach the remote. Check connectivity and retry explicitly.",
+                    "Git could not reach the remote. Check connectivity and inspect the operation outcome before retrying.",
                 ));
             }
-            if diagnostic.contains("non-fast-forward") {
+            if failure_code == ErrorCode::FetchFailed && diagnostic.contains("non-fast-forward") {
                 return Err(error(ErrorCode::FetchFailed,"Remote history rewound or diverged from cached tracking refs. No force update was applied; review the history in your terminal."));
             }
+        }
+        if failure_code == ErrorCode::PushFailed
+            && bytes
+                .split(|b| *b == b'\n')
+                .any(|line| line.starts_with(b"!\t"))
+        {
+            return Err(error(ErrorCode::PushRejected, "Remote rejected the single-branch push. Refresh remote state and review branch protections and permissions."));
         }
         return Err(error(failure_code.clone(),"Git transfer step failed. Check GitHub login, network access, disk space, and repository availability. Retained staging data can be reviewed; retry uses a new staging directory."));
     }

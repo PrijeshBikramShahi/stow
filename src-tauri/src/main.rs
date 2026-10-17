@@ -18,6 +18,8 @@ fn main() {
                 .and_then(|path| Registry::open(&path))
                 .and_then(|registry| {
                     registry.reconcile_pulls()?;
+                    registry.reconcile_pushes()?;
+                    registry.reconcile_changes()?;
                     Ok(registry)
                 })
                 .map(|registry| {
@@ -27,6 +29,9 @@ fn main() {
                         operations: Operations::default(),
                         admission: Mutex::new(()),
                         pull_confirmation: Mutex::new(None),
+                        push_confirmation: Mutex::new(None),
+                        change_snapshot: Mutex::new(None),
+                        commit_confirmation: Mutex::new(None),
                     })
                 });
             // Keep the window usable so database failures can be reported in the UI.
@@ -39,6 +44,14 @@ fn main() {
             ipc::start_fetch,
             ipc::start_pull,
             ipc::confirm_pull,
+            ipc::start_push,
+            ipc::confirm_push,
+            ipc::review_changes,
+            ipc::change_diff,
+            ipc::change_status,
+            ipc::start_index_change,
+            ipc::start_commit,
+            ipc::confirm_commit,
             ipc::workspace_settings,
             ipc::save_workspace_preferences,
             ipc::validate_clone_destination,

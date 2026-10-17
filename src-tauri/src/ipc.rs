@@ -19,6 +19,10 @@ pub struct Service {
     // Serialize operation admission and registry removal, avoiding unregister/scan races.
     pub admission: Mutex<()>,
     pub pull_confirmation: Mutex<Option<(String, std::sync::mpsc::Sender<bool>)>>,
+    pub push_confirmation: Mutex<Option<(String, std::sync::mpsc::Sender<bool>)>>,
+    pub change_snapshot: Mutex<Option<crate::changes::Snapshot>>,
+    pub commit_confirmation:
+        Mutex<Option<(crate::changes::CommitPreview, std::sync::mpsc::Sender<bool>)>>,
 }
 pub struct AppState(pub Result<Arc<Service>>);
 fn service(state: &State<'_, AppState>) -> Result<Arc<Service>> {
@@ -201,6 +205,291 @@ fn join_error<T>(_: T) -> AppError {
         ErrorCode::Internal,
         "Background task failed. Restart Stow and try again.",
     )
+}
+
+fn reviewed(service: &Service, project_id: i64, token: &str) -> Result<crate::changes::Snapshot> {
+    service
+        .change_snapshot
+        .lock()
+        .map_err(join_error)?
+        .as_ref()
+        .filter(|s| s.view.project_id == project_id && s.view.token == token)
+        .cloned()
+        .ok_or_else(|| {
+            AppError::new(
+                ErrorCode::RecoveryRequired,
+                "Change review expired. Refresh changes and select again.",
+            )
+        })
+}
+#[tauri::command]
+pub async fn review_changes(
+    project_id: i64,
+    state: State<'_, AppState>,
+) -> Result<crate::changes::Review> {
+    let service = service(&state)?;
+    tauri::async_runtime::spawn_blocking(move || {
+        let _guard = service.admission.lock().map_err(join_error)?;
+        service.operations.ensure_idle()?;
+        // Only one bounded in-memory review is retained; no file contents go to SQLite.
+        *service.change_snapshot.lock().map_err(join_error)? = None;
+        let snapshot = crate::changes::review(
+            &service.registry,
+            &service.git,
+            project_id,
+            &std::sync::atomic::AtomicBool::new(false),
+        )?;
+        let view = snapshot.view.clone();
+        *service.change_snapshot.lock().map_err(join_error)? = Some(snapshot);
+        Ok(view)
+    })
+    .await
+    .map_err(join_error)?
+}
+#[derive(serde::Deserialize)]
+pub struct DiffRequest {
+    project_id: i64,
+    token: String,
+    path: String,
+    staged: bool,
+}
+#[tauri::command]
+pub async fn change_diff(
+    request: DiffRequest,
+    state: State<'_, AppState>,
+) -> Result<crate::changes::Diff> {
+    let service = service(&state)?;
+    tauri::async_runtime::spawn_blocking(move || {
+        let _guard = service.admission.lock().map_err(join_error)?;
+        service.operations.ensure_idle()?;
+        let snapshot = reviewed(&service, request.project_id, &request.token)?;
+        crate::changes::diff(
+            &service.registry,
+            &service.git,
+            &snapshot,
+            &request.path,
+            request.staged,
+            &std::sync::atomic::AtomicBool::new(false),
+        )
+    })
+    .await
+    .map_err(join_error)?
+}
+#[derive(Serialize)]
+pub struct ChangeStatus {
+    history: Vec<crate::changes::ChangeJob>,
+    confirmation: Option<crate::changes::CommitPreview>,
+}
+#[tauri::command]
+pub async fn change_status(project_id: i64, state: State<'_, AppState>) -> Result<ChangeStatus> {
+    let service = service(&state)?;
+    tauri::async_runtime::spawn_blocking(move || {
+        let confirmation = service
+            .commit_confirmation
+            .lock()
+            .map_err(join_error)?
+            .as_ref()
+            .filter(|(p, _)| p.job.project_id == project_id)
+            .map(|(p, _)| crate::changes::CommitPreview {
+                job: p.job.clone(),
+                repository: p.repository.clone(),
+                author: p.author.clone(),
+                message: p.message.clone(),
+                entries: p.entries.clone(),
+            });
+        Ok(ChangeStatus {
+            history: service.registry.change_history(project_id)?,
+            confirmation,
+        })
+    })
+    .await
+    .map_err(join_error)?
+}
+#[derive(serde::Deserialize)]
+pub struct IndexRequest {
+    project_id: i64,
+    token: String,
+    paths: Vec<String>,
+    unstage: bool,
+}
+#[tauri::command]
+pub fn start_index_change(
+    request: IndexRequest,
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+) -> Result<Operation> {
+    let service = service(&state)?;
+    let (snapshot, operation, cancel) = {
+        let _guard = service.admission.lock().map_err(join_error)?;
+        let snapshot = reviewed(&service, request.project_id, &request.token)?;
+        let (operation, cancel) =
+            service
+                .operations
+                .start(if request.unstage { "unstage" } else { "stage" })?;
+        *service.change_snapshot.lock().map_err(join_error)? = None;
+        (snapshot, operation, cancel)
+    };
+    let id = operation.id.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let outcome=std::panic::catch_unwind(std::panic::AssertUnwindSafe(||crate::changes::mutate_index(&service.registry,&service.git,&snapshot,&request.paths,request.unstage,&cancel,&mut|message,percent|{
+            let _=service.operations.progress(&id,ScanProgress{message:Some(message.into()),percent,..Default::default()});let _=app.emit("operation-progress",&id);
+        }))).unwrap_or_else(|_|Err(AppError::new(ErrorCode::RecoveryRequired,"Index worker interrupted. Inspect index, HEAD, locks, and change history; refresh changes before retrying.")));
+        let _ = service.operations.finish(&id, outcome);
+        let _ = app.emit("operation-progress", &id);
+    });
+    Ok(operation)
+}
+#[derive(serde::Deserialize)]
+pub struct CommitRequest {
+    project_id: i64,
+    token: String,
+    message: String,
+}
+#[tauri::command]
+pub fn start_commit(
+    request: CommitRequest,
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+) -> Result<Operation> {
+    let service = service(&state)?;
+    let (snapshot, operation, cancel) = {
+        let _guard = service.admission.lock().map_err(join_error)?;
+        let snapshot = reviewed(&service, request.project_id, &request.token)?;
+        let (operation, cancel) = service.operations.start("commit")?;
+        *service.change_snapshot.lock().map_err(join_error)? = None;
+        (snapshot, operation, cancel)
+    };
+    let id = operation.id.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let mut prepared = None;
+        let outcome=std::panic::catch_unwind(std::panic::AssertUnwindSafe(||{
+            prepared=Some(crate::changes::prepare_commit(&service.registry,&service.git,&snapshot,request.message,&cancel)?);
+            let commit=prepared.as_mut().expect("prepared commit");let(tx,rx)=std::sync::mpsc::channel();
+            *service.commit_confirmation.lock().map_err(join_error)?=Some((commit.preview(),tx));
+            let mut report=|message:&str,percent:Option<u8>|{let _=service.operations.progress(&id,ScanProgress{message:Some(message.into()),percent,..Default::default()});let _=app.emit("operation-progress",&id);};
+            report("Review staged files, message, and author in Changes. Workspace reserved.",None);
+            wait_confirmation(&rx,&cancel)?;*service.commit_confirmation.lock().map_err(join_error)?=None;
+            commit.execute(&service.registry,&service.git,&cancel,&mut report)
+        })).unwrap_or_else(|_|Err(AppError::new(ErrorCode::RecoveryRequired,"Commit worker interrupted. Inspect HEAD, index, locks, and change history; no automatic retry occurred.")));
+        if let Ok(mut p) = service.commit_confirmation.lock() {
+            *p = None;
+        }
+        if let (Some(commit), Err(error)) = (prepared.as_mut(), &outcome) {
+            if commit.job.state == "running" {
+                let _ = commit.stop(&service.registry, error.clone());
+            }
+        }
+        drop(prepared);
+        let _ = service.operations.finish(&id, outcome);
+        let _ = app.emit("operation-progress", &id);
+    });
+    Ok(operation)
+}
+#[tauri::command]
+pub fn confirm_commit(id: String, confirmed: bool, state: State<'_, AppState>) -> Result<()> {
+    let service = service(&state)?;
+    let mut pending = service.commit_confirmation.lock().map_err(join_error)?;
+    if pending
+        .as_ref()
+        .is_none_or(|(preview, _)| preview.job.id != id)
+    {
+        return Err(AppError::new(
+            ErrorCode::RecoveryRequired,
+            "Commit confirmation expired. Review again.",
+        ));
+    }
+    pending
+        .take()
+        .expect("checked confirmation")
+        .1
+        .send(confirmed)
+        .map_err(join_error)
+}
+
+#[tauri::command]
+pub fn start_push(
+    project_id: i64,
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+) -> Result<Operation> {
+    let service = service(&state)?;
+    let (operation, cancel) = {
+        let _guard = service.admission.lock().map_err(join_error)?;
+        service.operations.start("push")?
+    };
+    let id = operation.id.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let mut prepared = None;
+        let outcome=std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let mut report=|message:&str,percent:Option<u8>| {
+                let _=service.operations.progress(&id,ScanProgress{message:Some(message.into()),percent,..Default::default()});
+                let _=app.emit("operation-progress",&id);
+            };
+            prepared=Some(crate::push::prepare(&service.registry,&service.git,project_id,&cancel,&mut report)?);
+            let push=prepared.as_mut().expect("prepared push");
+            let(tx,rx)=std::sync::mpsc::channel();
+            *service.push_confirmation.lock().map_err(join_error)?=Some((push.job.id.clone(),tx));
+            report("Review exact push destination and commit in Sync details. Workspace reserved.",None);
+            wait_confirmation(&rx,&cancel)?;
+            *service.push_confirmation.lock().map_err(join_error)?=None;
+            push.execute(&service.registry,&service.git,&cancel,&mut report)
+        })).unwrap_or_else(|_|Err(AppError::new(ErrorCode::RecoveryRequired,"Push worker interrupted. Inspect the durable push history and exact remote branch before retrying.")));
+        if let Ok(mut pending) = service.push_confirmation.lock() {
+            *pending = None;
+        }
+        if let (Some(push), Err(error)) = (prepared.as_mut(), &outcome) {
+            if push.job.state == "running" {
+                let _ = push.stop(&service.registry, error.clone());
+            }
+        }
+        drop(prepared);
+        let _ = service.operations.finish(&id, outcome);
+        let _ = app.emit("operation-progress", &id);
+    });
+    Ok(operation)
+}
+fn wait_confirmation(
+    rx: &std::sync::mpsc::Receiver<bool>,
+    cancel: &std::sync::atomic::AtomicBool,
+) -> Result<()> {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(300);
+    loop {
+        check_cancel(cancel)?;
+        match rx.recv_timeout(std::time::Duration::from_millis(100)) {
+            Ok(true) => return Ok(()),
+            Ok(false) | Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
+                return Err(AppError::new(
+                    ErrorCode::Cancelled,
+                    "Confirmation declined.",
+                ))
+            }
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+                if std::time::Instant::now() >= deadline {
+                    return Err(AppError::new(
+                        ErrorCode::Cancelled,
+                        "Confirmation expired. Review again.",
+                    ));
+                }
+            }
+        }
+    }
+}
+#[tauri::command]
+pub fn confirm_push(id: String, confirmed: bool, state: State<'_, AppState>) -> Result<()> {
+    let service = service(&state)?;
+    let mut pending = service.push_confirmation.lock().map_err(join_error)?;
+    if pending.as_ref().is_none_or(|(job, _)| job != &id) {
+        return Err(AppError::new(
+            ErrorCode::RecoveryRequired,
+            "Push confirmation expired. Review again.",
+        ));
+    }
+    pending
+        .take()
+        .expect("checked confirmation")
+        .1
+        .send(confirmed)
+        .map_err(join_error)
 }
 
 #[tauri::command]
@@ -442,6 +731,7 @@ pub async fn sync_status(id: i64, state: State<'_, AppState>) -> Result<crate::s
             record: service.registry.sync_record(id)?,
             history: service.registry.fetch_history(id)?,
             pulls: service.registry.pull_history(id)?,
+            pushes: service.registry.push_history(id)?,
         })
     })
     .await

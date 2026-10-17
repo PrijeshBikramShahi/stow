@@ -17,4 +17,7 @@ pub mod safe_fs;
 mod git_process;
 pub mod sync;
 
+pub mod changes;
 pub mod pull;
+pub mod push;
+mod workspace;

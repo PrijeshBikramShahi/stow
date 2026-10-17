@@ -400,7 +400,7 @@ fn migration_from_v1_preserves_local_rows_and_remote_cache_survives_restart() {
     let version: i64 = conn
         .pragma_query_value(None, "user_version", |r| r.get(0))
         .unwrap();
-    assert_eq!(version, 5);
+    assert_eq!(version, 7);
 }
 #[test]
 fn stable_ids_rename_transfer_and_absent_records_retained() {

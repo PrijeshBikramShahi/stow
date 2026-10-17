@@ -21,7 +21,7 @@ impl Registry {
         let version: i64 = connection
             .pragma_query_value(None, "user_version", |row| row.get(0))
             .map_err(db_error)?;
-        if version > 5 {
+        if version > 7 {
             return Err(AppError::new(
                 ErrorCode::Database,
                 "This registry was created by a newer Stow version.",
@@ -59,6 +59,20 @@ impl Registry {
             let transaction = connection.transaction().map_err(db_error)?;
             transaction
                 .execute_batch(include_str!("../migrations/005_pull.sql"))
+                .map_err(db_error)?;
+            transaction.commit().map_err(db_error)?;
+        }
+        if version < 6 {
+            let transaction = connection.transaction().map_err(db_error)?;
+            transaction
+                .execute_batch(include_str!("../migrations/006_push.sql"))
+                .map_err(db_error)?;
+            transaction.commit().map_err(db_error)?;
+        }
+        if version < 7 {
+            let transaction = connection.transaction().map_err(db_error)?;
+            transaction
+                .execute_batch(include_str!("../migrations/007_changes.sql"))
                 .map_err(db_error)?;
             transaction.commit().map_err(db_error)?;
         }
@@ -425,6 +439,40 @@ impl Registry {
     }
     pub fn save_fetch(&self, job: &crate::sync::FetchJob) -> Result<()> {
         self.connection.lock().map_err(db_error)?.execute("INSERT INTO fetch_jobs(id,project_id,started_at,record_json) VALUES(?1,?2,?3,?4) ON CONFLICT(id) DO UPDATE SET record_json=excluded.record_json",params![job.id,job.project_id,job.started_at,serde_json::to_string(job).map_err(db_error)?]).map_err(db_error)?;
+        Ok(())
+    }
+    pub fn save_push(&self, job: &crate::push::PushJob) -> Result<()> {
+        self.connection.lock().map_err(db_error)?.execute("INSERT INTO push_jobs(id,project_id,started_at,record_json) VALUES(?1,?2,?3,?4) ON CONFLICT(id) DO UPDATE SET record_json=excluded.record_json",params![job.id,job.project_id,job.started_at,serde_json::to_string(job).map_err(db_error)?]).map_err(db_error)?;
+        Ok(())
+    }
+    pub fn save_change(&self, job: &crate::changes::ChangeJob) -> Result<()> {
+        self.connection.lock().map_err(db_error)?.execute("INSERT INTO change_jobs(id,project_id,started_at,record_json) VALUES(?1,?2,?3,?4) ON CONFLICT(id) DO UPDATE SET record_json=excluded.record_json",params![job.id,job.project_id,job.started_at,serde_json::to_string(job).map_err(db_error)?]).map_err(db_error)?;
+        Ok(())
+    }
+    pub fn change_history(&self, id: i64) -> Result<Vec<crate::changes::ChangeJob>> {
+        let c = self.connection.lock().map_err(db_error)?;
+        let mut stmt=c.prepare("SELECT record_json FROM change_jobs WHERE project_id=?1 ORDER BY started_at DESC,rowid DESC LIMIT 50").map_err(db_error)?;
+        let rows = stmt
+            .query_map([id], |r| r.get::<_, String>(0))
+            .map_err(db_error)?;
+        rows.map(|r| serde_json::from_str(&r.map_err(db_error)?).map_err(db_error))
+            .collect()
+    }
+    pub fn reconcile_changes(&self) -> Result<()> {
+        self.connection.lock().map_err(db_error)?.execute_batch("UPDATE change_jobs SET record_json=json_set(record_json,'$.state','requires_inspection','$.error',json('{\"code\":\"recovery_required\",\"message\":\"Local operation interrupted. Refresh HEAD and changes and inspect native Git locks before retrying. No automatic recovery occurred.\"}')) WHERE json_extract(record_json,'$.state')='running';").map_err(db_error)?;
+        Ok(())
+    }
+    pub fn push_history(&self, id: i64) -> Result<Vec<crate::push::PushJob>> {
+        let c = self.connection.lock().map_err(db_error)?;
+        let mut stmt=c.prepare("SELECT record_json FROM push_jobs WHERE project_id=?1 ORDER BY started_at DESC,rowid DESC LIMIT 50").map_err(db_error)?;
+        let rows = stmt
+            .query_map([id], |r| r.get::<_, String>(0))
+            .map_err(db_error)?;
+        rows.map(|r| serde_json::from_str(&r.map_err(db_error)?).map_err(db_error))
+            .collect()
+    }
+    pub fn reconcile_pushes(&self) -> Result<()> {
+        self.connection.lock().map_err(db_error)?.execute_batch("UPDATE push_jobs SET record_json=json_set(record_json,'$.state','uncertain','$.error',json('{\"code\":\"recovery_required\",\"message\":\"Push interrupted. Verify the exact remote branch before retrying; no automatic retry occurred.\"}')) WHERE json_extract(record_json,'$.state')='running';").map_err(db_error)?;
         Ok(())
     }
     pub fn fetch_history(&self, id: i64) -> Result<Vec<crate::sync::FetchJob>> {

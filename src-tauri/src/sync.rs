@@ -78,6 +78,7 @@ pub struct SyncView {
     pub record: SyncRecord,
     pub history: Vec<FetchJob>,
     pub pulls: Vec<crate::pull::PullJob>,
+    pub pushes: Vec<crate::push::PushJob>,
 }
 pub(crate) fn config(git: &Git, path: &Path, cancel: &AtomicBool) -> Result<Vec<(String, String)>> {
     let marker = path.join(".git");
@@ -187,6 +188,10 @@ pub(crate) fn fetch_config(config: &[(String, String)], remote: &str) -> Result<
             "Remote name must use letters, numbers, hyphens, or underscores.",
         ));
     }
+    ordinary_config(config)?;
+    fetch_destination(config, remote)
+}
+pub(crate) fn ordinary_config(config: &[(String, String)]) -> Result<()> {
     for (key, _) in config {
         let allowed = [
             "core.repositoryformatversion",
@@ -207,9 +212,12 @@ pub(crate) fn fetch_config(config: &[(String, String)], remote: &str) -> Result<
             || key.starts_with("branch.")
                 && [".remote", ".merge"].iter().any(|end| key.ends_with(end));
         if !allowed {
-            return Err(unsupported("Fetch requires ordinary Git configuration. Includes, helpers, filters, URL rewrites, hooks, SSH/HTTP overrides, maintenance, and extra settings are unsupported; review configuration in your terminal. Stow will not rewrite it."));
+            return Err(unsupported("This operation requires ordinary Git configuration. Includes, helpers, filters, URL rewrites, hooks, signing, SSH/HTTP overrides, maintenance, and extra settings are unsupported; review configuration in your terminal. Stow will not rewrite it."));
         }
     }
+    Ok(())
+}
+fn fetch_destination(config: &[(String, String)], remote: &str) -> Result<String> {
     let urls = values(config, &format!("remote.{remote}.url"));
     if urls.len() != 1 {
         return Err(unsupported(
@@ -554,7 +562,7 @@ impl FetchRunner {
 }
 // Check only Git metadata (never worktree contents). Fail closed on redirection,
 // hardlinked files, unsupported layout, active locks, and excessive metadata size.
-fn metadata_tree(root: &Directory) -> Result<()> {
+fn metadata_tree(root: &Directory, own_index_lock: Option<&std::fs::File>) -> Result<()> {
     let mut stack = vec![root.path.clone()];
     let mut count = 0;
     while let Some(path) = stack.pop() {
@@ -581,6 +589,14 @@ fn metadata_tree(root: &Directory) -> Result<()> {
                 return Err(unsupported("Fetch requires private ordinary Git metadata without symlinks, hardlinks, shared write access, or special files."));
             }
             if name.ends_with(".lock") {
+                if entry.path() == root.path.join("index.lock")
+                    && own_index_lock.is_some_and(|file| {
+                        file.metadata()
+                            .is_ok_and(|m| m.dev() == meta.dev() && m.ino() == meta.ino())
+                    })
+                {
+                    continue;
+                }
                 return Err(error(ErrorCode::Busy,"Git metadata is locked by another operation. Retry after it finishes; Stow will not remove locks."));
             }
             if meta.is_dir() {
@@ -592,6 +608,13 @@ fn metadata_tree(root: &Directory) -> Result<()> {
     Ok(())
 }
 pub(crate) fn checked_layout(root: &Directory, meta: &Directory) -> Result<()> {
+    checked_layout_index_locked(root, meta, None)
+}
+pub(crate) fn checked_layout_index_locked(
+    root: &Directory,
+    meta: &Directory,
+    own_index_lock: Option<&std::fs::File>,
+) -> Result<()> {
     root.owned()?;
     meta.owned()?;
     root.validate_path()?;
@@ -609,8 +632,11 @@ pub(crate) fn checked_layout(root: &Directory, meta: &Directory) -> Result<()> {
             return Err(unsupported("Fetch does not support linked/shared worktrees, shallow history, grafts, or alternate object stores."));
         }
     }
-    metadata_tree(meta)?;
-    if !operation_markers(&meta.path).is_empty() {
+    metadata_tree(meta, own_index_lock)?;
+    if operation_markers(&meta.path)
+        .iter()
+        .any(|marker| marker != "index.lock" || own_index_lock.is_none())
+    {
         return Err(error(
             ErrorCode::Busy,
             "A Git operation is in progress. Complete it before fetching.",
@@ -794,7 +820,7 @@ fn fetch_impl(
     let local_dir = if local {
         let dir = Directory::open(Path::new(&url))?;
         dir.owned()?;
-        metadata_tree(&dir)?;
+        metadata_tree(&dir, None)?;
         for name in [
             "commondir",
             "gitdir",

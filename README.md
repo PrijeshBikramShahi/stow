@@ -1,10 +1,13 @@
 # Stow
 
-**Your projects. On demand.**
+**A private desktop home for the repositories already on your Mac.**
 
-Stow is a local-first, Git-powered desktop workspace manager. Stow discovers, registers, and inspects existing local repositories and optionally caches accessible GitHub repositories. It requires no account, cloud service, telemetry, container, or paid API.
+Stow finds local Git workspaces, keeps their status in one searchable library,
+and gives you deliberate tools to clone, inspect, sync, commit, and open them.
+The registry lives on your machine in SQLite. Local repository management needs
+no Stow account, hosted service, telemetry, container, or paid API.
 
-## Available now
+## What Stow does
 
 - Tauri 2 desktop app with a minimal React/TypeScript interface.
 - Native selection of multiple scan directories; bounded background discovery with progress and cancellation.
@@ -14,7 +17,7 @@ Stow is a local-first, Git-powered desktop workspace manager. Stow discovers, re
 - Explicit missing, inaccessible, unsupported, database, and Git errors; last successful metadata is retained and labelled stale.
 - Normal repositories and standard linked worktrees. Submodules are not registered independently.
 
-## GitHub library (Phase 2A)
+## GitHub library
 
 GitHub is optional; local scanning and inspection work independently. Remote-only entries contain metadata, never cloned files.
 
@@ -33,7 +36,7 @@ All remote data is labelled cached. The UI flags unconfirmed/disconnected result
 
 Matching uses conventional GitHub.com HTTPS/SSH remote URLs from all remote names, case-insensitive host/owner/repository names, and an optional `.git` suffix. Names alone never establish identity. Multiple candidates, historical names after renames/transfers, URL reuse, missing local workspaces, or unresolved additional GitHub remotes produce an uncertain link. Historical names are never silently promoted to verified links. Local Git snapshots remain separate. No link establishes recoverability or permission to remove a workspace.
 
-## Clone & Open (Phase 2B)
+## Clone and open
 
 1. Expand **Workspace preferences**, choose an existing default workspace directory, select VS Code, Cursor, or Finder, and save.
 2. Select a remote-only GitHub repository. Override the destination root or new folder name if needed. **Check destination** is a preview; cloning validates the filesystem again.
@@ -46,7 +49,7 @@ A private `.stow-clone-<id>` directory and durable SQLite journal are created be
 
 Editors are detected in `/Applications` and `~/Applications`. Handoff requests a new window with extensions disabled; editor trust/security settings and subsequent user actions remain the editor's responsibility. See [security decisions and limits](docs/SECURITY.md#phase-2b-clone-and-editor-boundary).
 
-## Sync preflight & fetch (Phase 3A)
+## Sync inspection and fetch
 
 Select a registered local workspace and choose **Inspect sync**. The assessment shows branch/HEAD, upstream, file counts, ahead/behind or divergence, operation markers, and unsupported configurations. Counts compare local commits with **cached** tracking refs; clean files, an upstream, and a successful fetch do not prove remote recovery or a successful push.
 
@@ -56,7 +59,7 @@ Fetch requires Git 2.46+, a private ordinary local `.git` directory, standard tr
 
 **Recent fetch history** persists through restart. Failed, cancelled, or interrupted attempts never become successful automatically. Objects or refs may already have changed when an attempt stops; inspect again before retrying. Private `.git/.stow-fetch-<id>` metadata is retained for review, including after success; no automatic retry, rollback, scheduling, or cleanup occurs. See [fetch policy](docs/SECURITY.md#phase-3a-synchronization-and-fetch-boundary).
 
-## Fast-forward pull (Phase 3B)
+## Fast-forward pull
 
 After **Inspect sync**, choose **Pull (Fast-Forward Only)**. Stow reserves the operation queue and workspace, checks its mutation policy, then asks you to confirm the exact branch, starting HEAD, and upstream. Confirmation expires after five minutes. It authorizes fetching that configured remote and advancing to its newly fetched upstream commit, only if it descends from the unchanged local HEAD. An equal commit is a successful no-op. Ahead-only and diverged branches are blocked.
 
@@ -64,13 +67,13 @@ Pull requires clean tracked files and index, **no untracked or ignored files**, 
 
 Keep editors and other Git tools idle during pull. Cancellation works before/during fetch and before integration. Once the working-tree update begins, Stow waits for Git and verifies the observed state, even if cancellation was requested. It never kills that update for a timeout. HEAD, index, files, and SQLite are not atomically updated together. **Requires inspection** means completion is uncertain: stop other Git activity, inspect status/HEAD/history/files and any locks in your terminal, then explicitly inspect again. Stow never resets, removes locks, automatically resumes, or retries. Unfinished pull journals become **requires inspection** on startup. Recent pull history includes the verified target and observed post-update HEAD/status when available.
 
-## Authorized push (Phase 3C)
+## Authorized push
 
 Choose **Review push** after inspecting sync. Preflight fetches the configured upstream, requires an existing destination branch, and shows the exact local commit, destination URL/ref, ahead count, and up to 20 commit summaries. **Confirm single-branch push** authorizes only that snapshot for five minutes. Stow rechecks HEAD/config/destination, refreshes the remote again, requires ancestry, and sends one fully qualified non-force refspec. It never publishes tags, other branches, or a first-time branch.
 
 Dirty files do not block publication of committed changes. **Staged, unstaged, untracked, and ignored content is excluded.** Hooks, custom push settings, push URLs, mirror behavior, and unsupported transports/configuration are rejected. The existing fetch restrictions also apply. After dispatch, Stow independently queries the exact remote ref and refreshes sync before recording verified success. A remote race can reject the push; cancellation, failed verification, or interruption can leave an **uncertain** outcome. Inspect the exact remote branch and run a fresh preflight before deciding to retry. There is no automatic retry or promise of lasting remote recoverability.
 
-## Review, stage, and commit (Phase 3D)
+## Review, stage, and commit
 
 The **Changes** section separates staged, unstaged, and untracked files. Choose a file's staged or working diff, select individual files, and use **Stage selected files** or **Unstage selected files**. Rename selections include both displayed paths; filenames with spaces, Unicode, tabs, newlines, and pathspec characters are preserved literally. Binary content is identified without rendering it. Ignored files are excluded by local ignore rules. Unstaging changes only the index and preserves working files.
 
@@ -124,7 +127,7 @@ cargo check --workspace
 
 The tests create small disposable Git repositories under the OS temporary directory. They never run mutations against user repositories. Run tests as an ordinary user so permission-denied cases are meaningful. Both Rust and frontend lockfiles should be kept in version control. One Cargo workspace shares `target/`; dev/test debug symbols and incremental compilation are disabled to reduce disk use.
 
-## Limits of this slice
+## Product boundaries
 
 - Scans are limited to six levels and 20,000 entry visits. Directory symlinks and common dependency/build folders are skipped. Every repository is a traversal boundary; select an intentionally independent nested repository explicitly if needed.
 - Bare repositories, submodules as projects, config includes, configured clean/smudge filters (including Git LFS), `core.worktree` redirection, partial clones, worktree-specific config extensions, and non-UTF-8 metadata/paths are unsupported. Rejected configs are never rewritten.

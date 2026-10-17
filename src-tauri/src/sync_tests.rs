@@ -566,3 +566,9 @@ fn unsupported_history_and_custom_refspecs_do_not_fetch() {
 
 #[path = "pull_tests.rs"]
 mod pulls;
+
+#[path = "push_tests.rs"]
+mod pushes;
+
+#[path = "changes_tests.rs"]
+mod changes;

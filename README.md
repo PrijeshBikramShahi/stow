@@ -64,6 +64,24 @@ Pull requires clean tracked files and index, **no untracked or ignored files**, 
 
 Keep editors and other Git tools idle during pull. Cancellation works before/during fetch and before integration. Once the working-tree update begins, Stow waits for Git and verifies the observed state, even if cancellation was requested. It never kills that update for a timeout. HEAD, index, files, and SQLite are not atomically updated together. **Requires inspection** means completion is uncertain: stop other Git activity, inspect status/HEAD/history/files and any locks in your terminal, then explicitly inspect again. Stow never resets, removes locks, automatically resumes, or retries. Unfinished pull journals become **requires inspection** on startup. Recent pull history includes the verified target and observed post-update HEAD/status when available.
 
+## Authorized push (Phase 3C)
+
+Choose **Review push** after inspecting sync. Preflight fetches the configured upstream, requires an existing destination branch, and shows the exact local commit, destination URL/ref, ahead count, and up to 20 commit summaries. **Confirm single-branch push** authorizes only that snapshot for five minutes. Stow rechecks HEAD/config/destination, refreshes the remote again, requires ancestry, and sends one fully qualified non-force refspec. It never publishes tags, other branches, or a first-time branch.
+
+Dirty files do not block publication of committed changes. **Staged, unstaged, untracked, and ignored content is excluded.** Hooks, custom push settings, push URLs, mirror behavior, and unsupported transports/configuration are rejected. The existing fetch restrictions also apply. After dispatch, Stow independently queries the exact remote ref and refreshes sync before recording verified success. A remote race can reject the push; cancellation, failed verification, or interruption can leave an **uncertain** outcome. Inspect the exact remote branch and run a fresh preflight before deciding to retry. There is no automatic retry or promise of lasting remote recoverability.
+
+## Review, stage, and commit (Phase 3D)
+
+The **Changes** section separates staged, unstaged, and untracked files. Choose a file's staged or working diff, select individual files, and use **Stage selected files** or **Unstage selected files**. Rename selections include both displayed paths; filenames with spaces, Unicode, tabs, newlines, and pathspec characters are preserved literally. Binary content is identified without rendering it. Ignored files are excluded by local ignore rules. Unstaging changes only the index and preserves working files.
+
+Enter your message and choose **Review commit**. Confirmation displays the repository, branch, parent SHA, staged tree and file summary, exact message, and author. The backend verifies the approved index, HEAD, branch, configuration, and author again. Commit creation uses only the staged snapshot, does not amend, and never pushes automatically. After completion, changes and local ahead/behind state refresh; **Review push** remains a separate action.
+
+These operations require a private ordinary repository with an existing commit, normal files/index, and no attributes, filters, submodules, symlinks, hardlinks, sparse/hidden index entries, or unsupported settings. A remote is not required for staging or commits. Direct local Git author settings override direct `$XDG_CONFIG_HOME/git/config` and `~/.gitconfig` values. Missing names/emails, global includes, hook overrides, and signing requirements block commits; settings are never rewritten. Non-sample repository hooks block committing. **Hooks, signing, and project tests are not run.**
+
+Keep other Git tools idle during mutations. Index edits are prepared privately, then installed under the native index lock only after stale-selection checks. Commits reserve the native index and HEAD, create the exact tree/commit, and compare-and-swap the approved branch. Branch reflogs record the update; this constrained implementation preserves the main HEAD reflog instead of adding an entry there. Cancellation is checked before publication but deferred through a local atomic write and verification. An interrupted operation can leave Git locks and retained `.git/.stow-changes-*` metadata. Refresh HEAD/changes and inspect locks/history before another attempt; Stow does not remove others' locks, reset files, or retry automatically.
+
+Review limits are 10,000 changed entries, 8 MiB per changed file, 32 MiB combined changed-file snapshots, 32 MiB index, and 512 KiB displayed diff. Choose at most 1,000 files per index operation. Messages are limited to 64 KiB. Oversized or unsupported changes require terminal review; there is no hunk-level staging. File contents and commit messages are not stored in operation journals.
+
 ## Prerequisites
 
 The initial supported platform is macOS on Apple Silicon. Install Xcode Command Line Tools, a current stable Rust toolchain, Node.js 22.12+ (or a compatible newer version), npm, and current system Git. The adapter looks for Git in `/opt/homebrew/bin/git`, `/usr/local/bin/git`, then `/usr/bin/git`; it never uses a repository-controlled PATH. Linux and Windows support remain unverified and require platform changes.
@@ -93,7 +111,7 @@ For a faster local verification bundle, use `npm run tauri -- build --debug --bu
 
 Metadata represents the last successful inspection; Stow does not watch filesystem changes. Cancellation preserves discoveries already saved. Scan roots are session-local and are not automatically rescanned. Operations with skipped repositories can complete with issues; expand the issue list to see why.
 
-On macOS the registry is `~/Library/Application Support/dev.stow.desktop/registry.sqlite3`. SQLite may also create WAL/SHM sidecars. Do not delete these while the application is running. Operation history is in-memory, capped at 100, and resets at restart. Clone journals, sync assessments, fetch journals, and workspace preferences persist separately.
+On macOS the registry is `~/Library/Application Support/dev.stow.desktop/registry.sqlite3`. SQLite may also create WAL/SHM sidecars. Do not delete these while the application is running. Operation history is in-memory, capped at 100, and resets at restart. Clone/fetch/pull/push/change journals, sync assessments, and workspace preferences persist separately.
 
 ## Development checks
 
@@ -110,11 +128,11 @@ The tests create small disposable Git repositories under the OS temporary direct
 
 - Scans are limited to six levels and 20,000 entry visits. Directory symlinks and common dependency/build folders are skipped. Every repository is a traversal boundary; select an intentionally independent nested repository explicitly if needed.
 - Bare repositories, submodules as projects, config includes, configured clean/smudge filters (including Git LFS), `core.worktree` redirection, partial clones, worktree-specific config extensions, and non-UTF-8 metadata/paths are unsupported. Rejected configs are never rewritten.
-- Each Git command has a 15-second timeout and a 4 MiB output cap per stream. Very large repositories may need a future inspection strategy.
+- Read-only Git commands have a 15-second timeout and a 4 MiB output cap per stream. Push commands use a 120-second bound; local mutation critical sections deliberately defer cancellation/timeouts. Very large repositories may need a future inspection strategy.
 - Submodule changes, ignored files, backup coverage, all-branch unpublished history, and recoverability are **not** assessed. Fetch records one successful contact, not ongoing remote reachability. “Clean” is not a deletion-safety verdict.
-- Global/system Git settings and global ignore rules are intentionally ignored; counts can therefore differ from terminal Git using those settings.
+- Global/system Git execution settings and global ignore rules are intentionally ignored; counts can therefore differ from terminal Git. Commit author resolution reads the limited direct global identity settings described above.
 - Conventional URL userinfo, query, and fragment credentials are stripped. Nonstandard/local remote URLs are withheld. Arbitrary secrets embedded in repository names or URL path segments cannot be identified reliably.
 - This is defense-in-depth for local inspection, not an OS sandbox for hostile repositories. Concurrent filesystem/config replacement is not fully prevented. See [security policy](docs/SECURITY.md).
-- No commit, push, cleanup, archive, or workspace deletion is implemented. Existing-workspace updates are limited to explicit constrained fetch and confirmed fast-forward pull.
+- No cleanup, archive, workspace deletion, branch creation/switching, amend, merge/rebase, or automatic synchronization is implemented.
 
 See [architecture](docs/ARCHITECTURE.md), [roadmap](docs/ROADMAP.md), and [verification record](docs/VERIFICATION.md).

@@ -303,3 +303,52 @@ Live process cancellation during transfer, forced termination during working-tre
 Shared Cargo target allocation: **1,404,328 → 1,407,396 KiB** (+3,068 KiB, approximately 3.00 MiB). Bundle: **31.26 → 31.60 MiB** (+0.34 MiB). Frontend `dist`: **260 → 264 KiB**; JavaScript **259.54 kB / 79.84 kB gzip** versus Phase 3A's 255.97 kB / 78.82 kB. Smoke root: **428 KiB**, including two retained fetch stages. No second target directory or dependency installation was introduced. Runtime CPU/RAM and large-repository traversal cost were not benchmarked; repeated validation and retained journals/staging add bounded per-check work and accumulating disk usage.
 
 The MVP intentionally rejects many otherwise valid repositories, including ignored files, hooks, attributes, symlinks, submodules, custom settings and nonordinary indexes. Advisory locks coordinate Stow, not malicious same-user writers; external editors/Git must remain idle. Integration can wait indefinitely on stalled Git/storage, and HEAD/index/files/database updates are not atomic. Recommended next slice is separately reviewed explicit push preflight and authorization (Phase 3C); no Phase 3C or Stow Project work was begun.
+
+## Phases 3C and 3D — authorized push and local commits (2026-10-17)
+
+Implemented the two supplied slices: refreshed single-branch push authorization and exact remote-ref verification; bounded local change review, separate staged/working diffs, selective file staging/unstaging, and confirmed staged-content commits. They share workspace validation and the operation queue. No new dependencies, branch-management features, Stow Project, archive preflight, deletion, or automatic push were introduced.
+
+### Changed components and policy
+
+- Backend: new `workspace.rs`, `push.rs`, `changes.rs`, their fixture suites, and migrations 006/007. Updated sync policy reuse, transfer error classification, registry journals, operation recovery, and Tauri IPC/registration.
+- Frontend: new `ChangesDetails.tsx` and change helpers; extended API types, SyncDetails push confirmation/history, App integration, minimal styling, and focused helper tests.
+- Documentation: README, architecture, security, roadmap, and this verification record.
+
+Push approval binds the repository, branch, exact HEAD and existing upstream destination after a constrained fetch. Execution refreshes and revalidates that state, requires ancestry, and publishes one explicit non-force refspec from private metadata. Independent remote-ref verification and durable refreshed sync state are required for verified success. Remote rejection, authentication/network errors before dispatch, cancellation, and uncertain publication remain distinct. Uncertain attempts never retry automatically. Working files and the original index are excluded from push mutation.
+
+Change snapshots retain bounded file/index state in memory; filenames travel through NUL-delimited machine formats and literal pathspecs. Index edits are prepared privately, checked for stale state, and installed under the native index lock. Commit confirmation binds the staged tree, exact message, author, branch and parent. Publication reserves native index/HEAD locks and compare-and-swaps the approved direct branch. Hooks/signing are unsupported and project tests are not implicitly run. Author settings are read without rewriting configuration. The branch reflog records publication; the main HEAD reflog is preserved. Incomplete local operations require inspection, without resetting files or removing foreign locks.
+
+### Automated verification
+
+Before the final regression run, the complete suite passed 115 tests (96 unit and 19 integration), with one opt-in live clone test ignored. Subsequent focused verification passed all 13 then-existing change fixtures after durability/HEAD validation fixes, and a new no-remote commit/native-lock fixture passed separately. The final four-thread run passed 96 unit tests but failed the preexisting `clone::tests::root_lock_and_exclusive_promotion` test at immediate reacquisition after dropping a directory lock (`Busy`, line 196). The serial rerun result is recorded below. This resembles the earlier Phase 3B concurrency-sensitive lock limitation; its cause has not been conclusively established, and no production locking policy or existing test was weakened.
+
+| Check | Result |
+| --- | --- |
+| `cargo test --workspace --no-default-features --locked --offline -- --test-threads=1` | Final serial run: 116 passed (97 unit, 19 integration); 1 opt-in live clone test ignored |
+| `npm run test:frontend` | 12 passed |
+| `cargo fmt --all -- --check` and `git diff --check` | Passed |
+| `cargo clippy --workspace --all-targets --locked --offline -- -D warnings` | Passed, including desktop IPC |
+| `npm run build` | TypeScript and Vite passed |
+| `npm run tauri -- build --debug --bundles app` | Passed; final macOS debug bundle 33.02 MiB |
+
+Coverage includes fast-forward and no-op push; dirty-file preservation; stale HEAD/identity/destination and remote races; divergence and unsupported configuration; authentication/network classification; rejection versus uncertain verification; cancellation boundaries and journal failures/restart reconciliation. Local-change fixtures exercise modified/new/deleted/renamed/binary files; spaces, Unicode, tabs, newlines and pathspec characters; index-only unstage; staged-only commit with remaining unstaged files; missing author/empty message/empty tree; stale index/HEAD/author; native lock conflicts; hooks/signing/attributes/symlink/hidden-index restrictions; size bounds; compare-and-swap branch protection; deferred cancellation and uncertain durability; and operation without any remote. Existing clone, fetch, pull, discovery, registry and cache regressions are included.
+
+Development testing caught Git's duplicate implicit HEAD update when combining symbolic HEAD verification with an update to its current branch. The final implementation uses private detached metadata with an explicit commondir, plus the real HEAD reservation and named-branch compare-and-swap. A dedicated fixture proves external branch switching is rejected while those native locks are held. Two desktop builds were necessary: the final rebuild incorporated corrected footer text and the durability outcome fix. No additional build directory was created.
+
+### Real macOS desktop smoke
+
+The final bundle was exercised through native macOS UI automation and actual Tauri IPC. A new disposable source, bare remote and registered workspace remain under `/private/tmp/stow-phase3cd-desktop-ft5x7h6v`. Prior fixtures, registrations and cached account data were preserved. Automated feature tests published only to disposable local bare remotes; separately authorized publication of Stow itself to GitHub is not counted as feature verification.
+
+- Reviewed a working diff, selectively staged `initial.txt` and `new नमस्ते.txt`, unstaged the Unicode file, then restaged it. Unselected and ignored files remained intact.
+- Changed `initial.txt` again after staging. Commit confirmation displayed the exact staged tree, parent, message and author. Declining persisted `cancelled/awaiting_confirmation` without moving HEAD.
+- A renewed confirmed commit produced `5f821665cdf75beedbd5e941f83b44b10295a823`, parent `5323902365a4a82090adb201aa5b934f2a4f8a85`, tree `b1b56a42033b35b5786580a7ea37f3d7c02f5f54`. Independent inspection confirmed only staged content was committed; the later working edit, unselected file and ignored file survived. UI counts became zero staged, one unstaged, one untracked, and one commit ahead. The remote still held the parent, proving no implicit push.
+- Push review showed the exact commit, `origin`, `refs/heads/main`, the fixture destination and one commit summary. Confirmation completed as `published_verified/verified`. Independent local-bare inspection matched the exact approved SHA; the UI became up to date while preserving working-file counts. The post-push index SHA-256 was `3d240ef89ea3b9ccdf844f5f70c9cba626b43b06547f12c06293a08afbfd228f`.
+- Quit while a second push awaited confirmation. Relaunch marked it `uncertain/awaiting_confirmation`, retained the verified result and local change history, showed manual inspection guidance, and performed no extra fetch/retry. Schema 7 and persisted histories were checked read-only. Local and remote branch SHAs remained equal; working content remained unchanged. The prior unfinished clone and GitHub cache timestamp were preserved.
+
+### Resource overhead, limits, and next slice
+
+Shared Cargo target allocation measured **1,407,396 → 1,420,844 KiB** (+13,448 KiB, about 13.13 MiB) after the desktop build. Frontend `dist` grew **264 → 272 KiB**; JavaScript is **269.55 kB / 82.22 kB gzip**, CSS **3.79 kB / 1.46 kB gzip**. The app bundle grew **31.60 → 33.02 MiB** (+1.43 MiB allocated), and the retained smoke root measured **496 KiB**. These are disk measurements, not runtime CPU/RAM benchmarks; subsequent test artifacts can change target allocation. Private metadata, objects and journals accumulate without automatic cleanup.
+
+Live private/SSO HTTPS push through Stow, forced termination during publication or local mutation, storage power loss, malicious same-user races, large repositories, network/removable filesystems, release signing/notarization, and other platforms remain unverified. Desktop restart coverage interrupted push before confirmation; interrupted commit recovery is fixture-tested. Local critical sections deliberately defer cancellation/timeouts and can wait on stalled Git/storage. HEAD, index, files, remote state and SQLite are not one atomic transaction. See `SECURITY.md` for supported repository/configuration and output limits.
+
+Recommended Phase 4A is a separately scoped, read-only recoverability assessment with evidence freshness and explicit unknowns. No archive preflight, Stow Project, or deletion implementation was started.

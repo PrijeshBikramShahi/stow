@@ -34,3 +34,12 @@ export function pullLabel(a: SyncAssessment): string {
 export function pendingPull(pulls: import('./api').PullJob[], operation?: {kind: string; state: string}): import('./api').PullJob | undefined {
  return operation?.kind === 'pull' && operation.state === 'running' ? pulls.find(j => j.state === 'running' && j.phase === 'awaiting_confirmation') : undefined;
 }
+export function pushReason(a: SyncAssessment): string | null {
+ if (!a.identity || a.inspection.detached || !a.inspection.branch || !a.inspection.commit) return 'Push requires a verified ordinary branch with an existing commit.';
+ if (a.operations.length) return 'A Git operation or lock is active.';
+ if (!['ahead', 'up_to_date', 'missing_tracking_ref'].includes(a.relation)) return 'Push requires one existing upstream and non-diverged history. Inspect and fetch to refresh.';
+ return null;
+}
+export function pendingPush(pushes: import('./api').PushJob[], operation?: {kind: string; state: string}): import('./api').PushJob | undefined {
+ return operation?.kind === 'push' && operation.state === 'running' ? pushes.find(j => j.state === 'running' && j.phase === 'awaiting_confirmation') : undefined;
+}

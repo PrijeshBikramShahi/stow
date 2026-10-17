@@ -33,6 +33,14 @@ export interface SystemInfo { git_version: string | null; git_error: AppError | 
 
 // All renderer/native calls go through this contract. No command accepts shell arguments.
 export const api = {
+  reviewChanges: (projectId: number) => invoke<ChangeReview>('review_changes', { projectId }),
+  changeStatus: (projectId: number) => invoke<ChangeStatus>('change_status', { projectId }),
+  changeDiff: (projectId: number, token: string, path: string, staged: boolean) => invoke<{binary: boolean; text: string}>('change_diff', { request: { project_id: projectId, token, path, staged } }),
+  changeIndex: (projectId: number, token: string, paths: string[], unstage: boolean) => invoke<Operation>('start_index_change', { request: { project_id: projectId, token, paths, unstage } }),
+  commit: (projectId: number, token: string, message: string) => invoke<Operation>('start_commit', { request: { project_id: projectId, token, message } }),
+  confirmCommit: (id: string, confirmed: boolean) => invoke<void>('confirm_commit', { id, confirmed }),
+  push: (projectId: number) => invoke<Operation>('start_push', { projectId }),
+  confirmPush: (id: string, confirmed: boolean) => invoke<void>('confirm_push', { id, confirmed }),
   pull: (projectId: number, token: string) => invoke<Operation>('start_pull', { request: { project_id: projectId, token } }),
   confirmPull: (id: string, confirmed: boolean) => invoke<void>('confirm_pull', { id, confirmed }),
   syncStatus: (id: number) => invoke<SyncView>('sync_status', { id }),
@@ -108,6 +116,15 @@ export interface SyncAssessment {
   relation: string; operations: string[]; remotes: {name: string; url: string; reason: string | null; fetch_key: string | null}[]; warnings: string[];
 }
 export interface FetchJob {id: string; project_id: number; remote: string; url: string; started_at: number; completed_at: number | null; state: string; phase: string; staging: string | null; error: AppError | null}
-export interface SyncView {record: {project_id: number; assessment: SyncAssessment | null; error: AppError | null}; history: FetchJob[]; pulls: PullJob[]}
+export interface SyncView {record: {project_id: number; assessment: SyncAssessment | null; error: AppError | null}; history: FetchJob[]; pulls: PullJob[]; pushes: PushJob[]}
+
+export interface PushJob { id: string; project_id: number; started_at: number; completed_at: number | null; state: string; phase: string; repository: string; branch: string; head: string; remote: string; url: string; destination: string; remote_before: string | null; remote_after: string | null; ahead: number; commits: string[]; dirty: Inspection['working_tree']; error: AppError | null }
 
 export interface PullJob { id: string; project_id: number; started_at: number; completed_at: number | null; state: string; phase: string; branch: string; upstream: string; before_head: string; target: string | null; after_head: string | null; after_relation: string | null; error: AppError | null }
+
+export interface Change {path: string; original: string | null; staged: string | null; unstaged: string | null; untracked: boolean; binary: boolean}
+export interface Author {name: string; email: string}
+export interface ChangeReview {token: string; project_id: number; repository: string; branch: string; head: string; entries: Change[]; author: Author | null; author_error: AppError | null}
+export interface ChangeJob {id: string; project_id: number; kind: string; state: string; phase: string; started_at: number; completed_at: number | null; branch: string; before_head: string; after_head: string | null; tree: string | null; paths: string[]; error: AppError | null}
+export interface CommitPreview {job: ChangeJob; repository: string; author: Author; message: string; entries: Change[]}
+export interface ChangeStatus {history: ChangeJob[]; confirmation: CommitPreview | null}

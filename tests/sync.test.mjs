@@ -20,6 +20,7 @@ test('fetch freshness requires verified success for the selected remote', () => 
 });
 
 import {pullReason, pullLabel, pendingPull} from '../frontend/sync.ts';
+import {pushReason, pendingPush} from '../frontend/sync.ts';
 const eligible = () => ({identity:{},inspection:{branch:'main',commit:'abc',detached:false,working_tree:{staged:0,unstaged:0,untracked:0,conflicted:0}},operations:[],relation:'behind',ahead:0,behind:3,upstream_ref:'refs/remotes/origin/main',remotes:[{name:'origin',reason:null}]});
 test('pull eligibility and confirmation are explicit and scoped to an active pull', () => {
  const a=eligible();
@@ -36,4 +37,14 @@ test('pull eligibility and confirmation are explicit and scoped to an active pul
  assert.equal(pendingPull(jobs,{kind:'pull',state:'requires_inspection'}),undefined);
  assert.equal(pendingPull(jobs,{kind:'fetch',state:'running'}),undefined);
  assert.equal(pendingPull([{...jobs[0],state:'requires_inspection'}],{kind:'pull',state:'running'}),undefined);
+});
+test('push allows dirty committed branches but blocks missing upstream and stale confirmation', () => {
+ const a=eligible();a.relation='ahead';a.inspection.working_tree.staged=2;a.inspection.working_tree.untracked=3;
+ assert.equal(pushReason(a),null);
+ for (const relation of ['behind','diverged','no_upstream','detached','unsupported']) assert.ok(pushReason({...a,relation}));
+ const jobs=[{id:'push1',state:'running',phase:'awaiting_confirmation'}];
+ assert.equal(pendingPush(jobs,{kind:'push',state:'running'})?.id,'push1');
+ assert.equal(pendingPush(jobs,{kind:'push',state:'requires_inspection'}),undefined);
+ assert.equal(pendingPush(jobs,{kind:'pull',state:'running'}),undefined);
+ assert.equal(pendingPush([{...jobs[0],state:'uncertain'}],{kind:'push',state:'running'}),undefined);
 });

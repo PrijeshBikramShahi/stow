@@ -5,6 +5,7 @@ import { open } from '@tauri-apps/plugin-dialog';
 import { api, errorMessage, type Operation, type Project, type SystemInfo, type Library, type AuthStatus } from './api';
 
 import { SyncDetails } from './SyncDetails';
+import { ChangesDetails } from './ChangesDetails';
 import { WorkspaceControls } from './WorkspaceControls';
 import type { WorkspaceSettings } from './api';
 import { libraryRows } from './library';
@@ -180,6 +181,7 @@ export function App() {
         </section>}
         {!selected ? !selectedRemote && <p className="empty">Select a repository to see its metadata.</p> : <>
           <SyncDetails key={selected.id} project={selected} operation={latest} busy={busy} act={act} />
+          <ChangesDetails key={`changes-${selected.id}`} project={selected} operation={latest} busy={busy} act={act} />
           <h2>{selected.name}</h2><p className="path">{selected.path}</p>
           <div className="actions"><button disabled={busy} onClick={() => void act(() => api.openProject(selected.id))}>Open workspace</button><button disabled={busy} onClick={() => void act(() => api.openProject(selected.id, true))}>Reveal in Finder</button><button className="primary" disabled={busy || !system?.git_version} onClick={() => void act(() => api.inspect(selected.id))}>Inspect project</button><button disabled={busy} onClick={() => setRemoveId(selected.id)}>Unregister</button></div>
           {removeId === selected.id && <div className="notice"><p>Remove “{selected.name}” from the registry? Its folder and files will stay on disk.</p><div className="actions"><button disabled={busy} onClick={() => void act(async () => { await api.remove(selected.id); setSelectedId(null); setRemoteId(null); setRemoveId(null); })}>Remove registration</button><button onClick={() => setRemoveId(null)}>Keep</button></div></div>}
@@ -201,6 +203,6 @@ export function App() {
         </>}
       </aside>
     </div>
-    <footer>Local inspection and new-workspace cloning · Explicit fetch and fast-forward pull · No push or workspace deletion · Nested repositories and submodules are not automatically scanned.</footer>
+    <footer>Local inspection and cloning · Explicit fetch, fast-forward pull, push, and staged commits · No workspace deletion · Nested repositories and submodules are not automatically scanned.</footer>
   </main>;
 }

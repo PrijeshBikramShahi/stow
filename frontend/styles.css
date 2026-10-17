@@ -57,3 +57,10 @@ select { font: inherit; color: inherit; background: #23272e; border: 1px solid #
 .filters { margin: 0 0 20px; }
 .filters label { font-size: 12px; color: #a5adb8; }
 .detail section { padding-bottom: 18px; margin-bottom: 18px; border-bottom: 1px solid #323941; }
+/* Local change review preserves whitespace while keeping long paths contained. */
+.change-list { padding-left: 1rem; }
+.change-list li { margin: .6rem 0; overflow-wrap: anywhere; }
+.change-list label { display: flex; gap: .5rem; align-items: baseline; }
+.change-list input { width: auto; }
+.diff-preview { max-height: 24rem; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; padding: .75rem; background: #f3f4f6; color: #171717; }
+textarea { display: block; width: 100%; box-sizing: border-box; font: inherit; }
